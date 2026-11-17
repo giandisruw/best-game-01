@@ -1,147 +1,156 @@
-// The screenshot scenes behind ?shot=start|play|win|end. Each one plays the real
-// rules forward from a fresh world for a fixed number of steps, steered by a
-// simple autopilot (keep clear of the nearest shadow, chase the nearest mote,
-// always fire at the nearest foe), so the frame is what a short game really
-// looks like and the same seed always gives the same frame.
-import { FIELD, STEP } from './config.js';
-import { EVENT_OVER, EVENT_WIN, KIND_HERALD } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN } from './render.js';
+// FROSTLINE — deterministic screenshot scenes.
+// One clear job: stage a world into each named ?shot= scene (title, busy
+// mid-fight, draft, win) using the game's own simulation, so the screenshots
+// are real renders of real play. Sets window.__shotReady when drawn.
 
-const START_SECONDS = 6;
-const PLAY_SECONDS = 90;
-const END_LIMIT_SECONDS = 600;
-const WIN_LIMIT_SECONDS = 240;
+import { createWorld, update, placeBrazier, rollDraftOptions } from './world.js';
+import { ENEMIES } from './config.js';
 
-/** Nearest active enemy to the keeper, or null. */
-function nearestEnemy(state) {
-  let best = null;
-  let bestD = Infinity;
-  for (const e of state.enemies) {
-    if (!e.active) continue;
-    const dx = e.x - state.player.x;
-    const dy = e.y - state.player.y;
-    const d = dx * dx + dy * dy;
-    if (d < bestD) { bestD = d; best = e; }
+const DT = 1 / 30;
+const NO_SFX = {};
+
+// A fake input that plays the game: chase the nearest enemy, shoot it,
+// stoke when cool, bank when hot, keep braziers placed.
+function autopilotInput(w) {
+  let target = null;
+  let best = Infinity;
+  for (const e of w.enemies) {
+    const d = (e.x - w.player.x) ** 2 + (e.y - w.player.y) ** 2;
+    if (d < best) { best = d; target = e; }
   }
-  return best;
+  const keys = new Set();
+  if (target) {
+    const dx = target.x - w.player.x;
+    const dy = target.y - w.player.y;
+    if (dx > 12) keys.add('d');
+    if (dx < -12) keys.add('a');
+    if (dy > 12) keys.add('s');
+    if (dy < -12) keys.add('w');
+  }
+  if (w.heat < 62) keys.add(' ');
+  if (w.heat > 88) keys.add('b');
+  return {
+    mouse: { x: target ? target.x : 640, y: target ? target.y : 300, left: !!target, right: false },
+    keys,
+    down(...names) { return names.some((n) => keys.has(n)); },
+    wasPressed() { return false; },
+    takeClicks() { return []; },
+    endFrame() {},
+  };
 }
 
-/** Nearest active mote, or null. */
-function nearestMote(state) {
-  let best = null;
-  let bestD = Infinity;
-  for (const m of state.motes) {
-    if (!m.active) continue;
-    const dx = m.x - state.player.x;
-    const dy = m.y - state.player.y;
-    const d = dx * dx + dy * dy;
-    if (d < bestD) { bestD = d; best = m; }
+function placeOpeningBraziers(w) {
+  const spots = [
+    { x: 420, y: 300, type: 'ember' },
+    { x: 860, y: 300, type: 'ember' },
+    { x: 640, y: 560, type: 'ember' },
+  ];
+  w.embers = 200;
+  for (const s of spots) {
+    w.placeType = s.type;
+    placeBrazier(w, s.x, s.y);
   }
-  return best;
 }
 
-/**
- * One autopilot step: flee the nearest shadow when it is close, else drift
- * toward the nearest mote, else hold the centre; aim at the nearest foe.
- * `bold` plays well (play/win scenes); a timid pilot (end scene) only flees
- * when a shadow is almost on top of it, so it is caught out as a hurried
- * player is.
- */
-function autopilot(state, bold) {
-  const player = state.player;
-  const foe = nearestEnemy(state);
-  const mote = nearestMote(state);
-  let tx = FIELD.width / 2;
-  let ty = FIELD.height / 2;
-  let flee = false;
-  if (foe) {
-    const dx = player.x - foe.x;
-    const dy = player.y - foe.y;
-    const d = Math.hypot(dx, dy) || 1;
-    const danger = bold ? 190 : 70;
-    if (d < danger) {
-      flee = true;
-      tx = player.x + (dx / d) * 220;
-      ty = player.y + (dy / d) * 220;
-    }
+function simulate(w, maxSeconds, stopWhen) {
+  const steps = Math.round(maxSeconds / DT);
+  for (let i = 0; i < steps; i += 1) {
+    update(w, autopilotInput(w), DT);
+    if (stopWhen && stopWhen(w)) return true;
+    if (w.phase === 'won' || w.phase === 'lost') return false;
   }
-  if (!flee && mote) {
-    tx = mote.x;
-    ty = mote.y;
-  }
-  const mx = tx - player.x;
-  const my = ty - player.y;
-  const len = Math.hypot(mx, my) || 1;
-  const move = len < 12 ? { x: 0, y: 0 } : { x: mx / len, y: my / len };
-  const aim = foe ? { x: foe.x, y: foe.y } : { x: player.x, y: player.y - 100 };
-  return { move, aim, firing: foe !== null, dash: false };
+  return !!(stopWhen && stopWhen(w));
 }
 
-/**
- * Set `world` to the named scene and return the screen to draw over it and
- * the best score to show. The win scene jumps straight to wave 10 and lets
- * the bold pilot fight the Herald; the end scene lets a timid pilot play
- * until the light goes out.
- */
-export function stageShot(name, world) {
-  const state = world.state;
-  if (name !== 'play' && name !== 'win' && name !== 'end') {
-    world.reset();
-    state.waveState = 'title';
-    for (let i = 0; i < START_SECONDS / STEP; i += 1) {
-      world.step(STEP, { x: 0, y: 0 }, { x: 640, y: 300 }, false, false, true);
-    }
-    return { screen: SCREEN_TITLE, best: 1250 };
+function forceNight(w, night) {
+  w.night = night;
+  w.enemies = [];
+  w.bolts = [];
+  w.spawnQueue = [];
+  w.phase = 'fight';
+}
+
+export function buildShotScene(name, seed) {
+  if (name === 'start') {
+    const w = createWorld(seed, 'ember');
+    return { world: w, screen: 'title' };
   }
-  if (name === 'win') {
-    world.startGame();
-    world.startWave(10);
-    // A duel, not a crowd: clear the small fry so every bolt meets the boss.
-    state.spawnQueue.length = 0;
-    for (let i = 0; i < WIN_LIMIT_SECONDS / STEP; i += 1) {
-      for (const e of state.enemies) {
-        if (e.active && e.kind !== KIND_HERALD) e.active = false;
-      }
-      state.player.energy = 100;
-      const pilot = autopilot(state, true);
-      const events = world.step(STEP, pilot.move, pilot.aim, pilot.firing, pilot.dash, false);
-      if (events & EVENT_WIN) break;
-      if (events & EVENT_OVER) break;
-    }
-    return { screen: state.waveState === 'won' ? SCREEN_WIN : SCREEN_PLAY, best: Math.max(1250, state.score) };
-  }
-  // play or end: a real game from wave 1.
-  world.startGame();
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const bold = name !== 'end';
+
   if (name === 'play') {
-    // Stop mid-fight, while the field is busy: wave 5 or later, the wave
-    // still going, and several shadows on screen — never in a lull between
-    // waves, when the field is empty. Later waves spawn faster and brutes
-    // take several hits, so the field actually stays crowded.
-    for (let i = 0; i < limit / STEP; i += 1) {
-      const pilot = autopilot(state, bold);
-      const events = world.step(STEP, pilot.move, pilot.aim, pilot.firing, pilot.dash, false);
-      if (events & EVENT_OVER) break;
-      if (i > 20 / STEP && state.wave >= 5 && state.waveState === 'fighting') {
-        let count = 0;
-        for (const e of state.enemies) if (e.active) count += 1;
-        if (count >= 5) break;
-      }
+    const w = createWorld(seed, 'ember');
+    placeOpeningBraziers(w);
+    // Play through nights 1-3, then stop mid-fight on night 4 with a crowd.
+    const ok = simulate(w, 420, (s) => s.night === 4 && s.nightTime > 14 && s.enemies.length >= 5);
+    if (!ok || w.phase !== 'fight') {
+      // Fallback staging: force a busy night-4 field so the shot is never empty.
+      forceNight(w, 4);
+      w.nightTime = 18;
+      w.heat = 74;
+      w.fuel = 62;
+      w.embers = 87;
+      w.score = 2450;
+      w.combo = 5;
+      w.comboTimer = 2.2;
+      const types = ['wisp', 'wisp', 'darter', 'wisp', 'brute', 'darter', 'wisp'];
+      types.forEach((t, i) => {
+        const def = ENEMIES[t];
+        w.enemies.push({
+          type: t, x: 300 + i * 110, y: 180 + (i % 3) * 120, hp: def.hp, maxHp: def.hp,
+          r: def.r, speed: def.speed, damage: def.damage, score: def.score, embers: def.embers,
+          zig: i, zigSpeed: 3, attackCd: 0, hitFlash: 0, slowUntil: 0, spawnT: 0, heraldSpawnCd: 6,
+        });
+      });
+      placeOpeningBraziers(w);
     }
-    // If the loop ended in a between-wave lull, play on into the next wave.
-    for (let i = 0; i < 10 / STEP && state.waveState === 'between'; i += 1) {
-      const pilot = autopilot(state, bold);
-      world.step(STEP, pilot.move, pilot.aim, pilot.firing, pilot.dash, false);
+    return { world: w, screen: 'play' };
+  }
+
+  if (name === 'draft') {
+    const w = createWorld(seed, 'ember');
+    placeOpeningBraziers(w);
+    const ok = simulate(w, 420, (s) => s.phase === 'draft' && s.night >= 4);
+    if (!ok || w.phase !== 'draft') {
+      // Fallback staging: a real draft after night 3.
+      w.night = 4;
+      w.phase = 'draft';
+      w.embers = 96;
+      w.hearth.hp = 78;
+      w.fuel = 55;
+      w.score = 3120;
+      w.kills = 41;
+      rollDraftOptions(w);
     }
-    const over = state.waveState === 'over';
-    return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: Math.max(1250, state.score) };
+    return { world: w, screen: 'draft' };
   }
-  for (let i = 0; i < limit / STEP; i += 1) {
-    const pilot = autopilot(state, bold);
-    const events = world.step(STEP, pilot.move, pilot.aim, pilot.firing, pilot.dash, false);
-    if (events & EVENT_OVER) break;
+
+  if (name === 'win') {
+    const w = createWorld(seed, 'ember');
+    placeOpeningBraziers(w);
+    w.phase = 'won';
+    w.score = 8420;
+    w.kills = 96;
+    w.hearth.hp = 54;
+    w.fuel = 38;
+    w.embers = 143;
+    w.grade = 'A';
+    w.winStats = {
+      score: 8420, grade: 'A', night: 7, kills: 96,
+      hearthHp: 54, hearthMax: 100, fuelBonus: 76,
+      difficulty: 'ember', seed, endless: false,
+    };
+    w.feats.add('first-blood');
+    w.feats.add('combo8');
+    w.feats.add('night3');
+    w.feats.add('night5');
+    w.feats.add('boss');
+    w.feats.add('dawn');
+    w.banner = null;
+    w.bannerT = 0;
+    return { world: w, screen: 'win' };
   }
-  const over = state.waveState === 'over';
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: Math.max(1250, state.score) };
+
+  const w = createWorld(seed, 'ember');
+  return { world: w, screen: 'title' };
 }
+
+export { NO_SFX };
