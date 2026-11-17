@@ -4,7 +4,17 @@
 [![rank](https://make.fun/badge/best-game-01/giandisruw/best-game-01/rank.svg)](https://make.fun/bounty/best-game-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
 [![reward](https://make.fun/badge/best-game-01/giandisruw/best-game-01/reward.svg)](https://make.fun/bounty/best-game-01?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
 
-Lumenfall is an original top-down arena game: you are the keeper of the last lantern, banishing waves of shadow wisps with bolts of light across 10 waves to face the Gloom Herald boss, collecting sun motes to keep your light burning.
+FROSTLINE: Keep the Hearth is an original tower-defence survival game about
+temperature. You are the keeper of the last hearth in a frozen valley, and
+heat is a dial, not a button: stoke the fire and your braziers blaze, the lit
+ground grows and the frost melts — but push past the red line and the hearth
+burns itself while fuel drains fast. Bank the fire to save fuel and the frost
+creeps in from the edges as a living stain, eating the hearth's health.
+
+Survive 7 nights, draft 1-of-3 cards and spend embers in the shop between
+nights, and on night 7 slay THE WHITEOUT HERALD to win — "Dawn breaks, the
+hearth endures." Lose the hearth and the frost takes it all. Win once and
+ENDLESS mode unlocks.
 
 ## Run it
 
@@ -12,7 +22,10 @@ Lumenfall is an original top-down arena game: you are the keeper of the last lan
 node serve.ts
 ```
 
-Then open http://localhost:8080 in desktop Chrome. Move with WASD or arrow keys, aim with the mouse, hold click or Space to fire, dash with Shift or right-click, pause with P.
+Then open http://localhost:8080 in desktop Chrome. Move with WASD or arrow
+keys, aim with the mouse, click to shoot, press Q then click to place a
+brazier, hold Space to stoke, hold B or right-click to bank, 1 and 2 for
+abilities, P to pause, M to mute, R to restart.
 
 ---
 
